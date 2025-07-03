@@ -18,7 +18,7 @@ impl ClockWidget {
         self.label.clone()
     }
 
-    pub async fn update(&self) {
+    pub fn update(&self) {
         let now = Local::now();
         let formatted_time = now.format("%H:%M:%S | %d.%m.%y").to_string();
         self.label

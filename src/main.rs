@@ -1,20 +1,24 @@
 mod widgets;
 
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, gdk, glib};
+use gtk4::{Application, ApplicationWindow, CenterBox, gdk, glib};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::collections::HashMap;
+use tokio::runtime::Runtime;
 
 use widgets::clock::ClockWidget;
+use widgets::workspaces::WorkspacesWidget;
 
 struct BarManager {
     clocks: HashMap<String, ClockWidget>,
+    workspaces: HashMap<String, WorkspacesWidget>,
 }
 
 impl BarManager {
     fn new() -> Self {
         Self {
             clocks: HashMap::new(),
+            workspaces: HashMap::new(),
         }
     }
 
@@ -22,14 +26,27 @@ impl BarManager {
         self.clocks.insert(monitor_name, clock);
     }
 
-    async fn update_all_clocks(&self) {
+    fn add_workspaces(&mut self, monitor_name: String, workspaces: WorkspacesWidget) {
+        self.workspaces.insert(monitor_name, workspaces);
+    }
+
+    fn update_all_clocks(&self) {
         for clock in self.clocks.values() {
-            clock.update().await;
+            clock.update();
+        }
+    }
+
+    async fn update_all_workspaces(&self) {
+        for workspaces in self.workspaces.values() {
+            workspaces.update().await;
         }
     }
 }
 
 fn main() {
+    let rt = Runtime::new().expect("Failed to create Tokio runtime");
+    let _guard = rt.enter();
+
     let app = Application::builder()
         .application_id("com.github.sokolawesome.forgebar")
         .build();
@@ -59,7 +76,8 @@ fn build_ui(app: &Application) {
     glib::timeout_add_seconds_local(1, move || {
         let bar_manager = bar_manager.clone();
         glib::MainContext::default().spawn_local(async move {
-            bar_manager.borrow().update_all_clocks().await;
+            bar_manager.borrow().update_all_clocks();
+            bar_manager.borrow().update_all_workspaces().await;
         });
         glib::ControlFlow::Continue
     });
@@ -73,7 +91,7 @@ fn create_bar_window(
 ) -> ApplicationWindow {
     let window = ApplicationWindow::builder()
         .application(app)
-        .title(&format!("forgebar - {}", monitor_name))
+        .title(format!("forgebar - {}", monitor_name))
         .build();
 
     window.init_layer_shell();
@@ -81,34 +99,31 @@ fn create_bar_window(
     window.set_anchor(Edge::Bottom, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
+    window.set_exclusive_zone(35);
     window.set_namespace(Some("forgebar"));
     window.set_monitor(Some(monitor));
 
-    let main_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    let main_box = CenterBox::new();
     main_box.set_margin_start(10);
     main_box.set_margin_end(10);
     main_box.set_margin_top(5);
     main_box.set_margin_bottom(5);
 
     let left_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
-    left_box.set_hexpand(true);
-    left_box.set_halign(gtk4::Align::Start);
+    let workspaces = WorkspacesWidget::new();
+    workspaces.setup_css();
+    left_box.append(&workspaces.widget());
 
-    let center_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
-    center_box.set_halign(gtk4::Align::Center);
-
-    let right_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
-    right_box.set_hexpand(true);
-    right_box.set_halign(gtk4::Align::End);
+    bar_manager.add_workspaces(monitor_name.to_string(), workspaces);
 
     let clock = ClockWidget::new();
-    center_box.append(&clock.widget());
+    bar_manager.add_clock(monitor_name.to_string(), clock.clone());
 
-    bar_manager.add_clock(monitor_name.to_string(), clock);
+    let right_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
 
-    main_box.append(&left_box);
-    main_box.append(&center_box);
-    main_box.append(&right_box);
+    main_box.set_start_widget(Some(&left_box));
+    main_box.set_center_widget(Some(&clock.widget()));
+    main_box.set_end_widget(Some(&right_box));
 
     window.set_child(Some(&main_box));
 
